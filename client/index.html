@@ -3,20 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>MMORPG v0.5.0</title>
+    <title>MMORPG v0.6.0</title>
     <style>
       html, body { height: 100%; margin: 0; background: #0e0f13; color: #e9eef2; font-family: system-ui, Arial; }
       #wrap { position: relative; display: grid; place-items: center; height: 100%; gap: 12px; }
-      #hud { display: none; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; z-index:2; }
+      #hud { position: absolute; top: 16px; display: none; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; z-index: 20; padding: 6px 10px; background: rgba(18,21,33,0.7); border:1px solid #2e3448; border-radius:10px; box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
       input, button { padding: 8px 10px; border-radius: 6px; border: 1px solid #3a425c; background: #121521; color: #cfe3ff; }
       button { cursor: pointer; background: #1d2436; }
       button:hover { background: #232b40; }
-      .pill { padding: 2px 8px; border: 1px solid #3a425c; border-radius: 999px; font-size: 12px; opacity: 0.9; }
+      .pill { padding: 2px 8px; border: 1px solid #3a425c; border-radius: 999px; font-size: 12px; opacity: 0.9; background: #0f1422; }
       .row { display: flex; gap: 8px; align-items: center; }
       #auth { position: relative; z-index: 9999; display:flex; flex-direction:column; gap:10px; width: min(360px, 90vw); background:#121521; padding:16px; border:1px solid #2e3448; border-radius:10px; }
       #auth h2 { margin:0 0 6px 0; font-weight:600; }
       #status { font-size: 12px; color: #9ad; }
       .error { color: #f99; }
+      #stage canvas { outline: none; }
     </style>
   </head>
   <body>
@@ -43,8 +44,10 @@
       <div id="hud">
         <span id="who" class="pill"></span>
         <span id="stats" class="pill"></span>
+        <button id="pvpBtn">PvP: OFF</button>
+        <button id="modeBtn">Modo: 2D</button>
         <button id="logoutBtn">Sair</button>
-        <span class="pill">WASD/Setas: mover • Espaço: atacar • E: pegar • Q: usar poção • Clique: mover • Clique no monstro: perseguir e atacar</span>
+        <span class="pill">WASD/Setas • Espaço • E/Q • Clique: mover • Clique monstro/jogador: perseguir/auto-ataque</span>
       </div>
       <div id="stage"></div>
     </div>

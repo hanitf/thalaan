@@ -1,4 +1,4 @@
-// MMORPG v0.5.0 — server: unchanged from 0.4.9 (client adds auto-attack)
+// MMORPG v0.6.0 — Three.js client + PvP (server changes here)
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -17,6 +17,7 @@ const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || '';
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const PORT = process.env.PORT || 3000;
 const ALLOW_GUESTS = String(process.env.ALLOW_GUESTS || 'false').toLowerCase() === 'true';
+const PVP_MODE = String(process.env.PVP_MODE || 'optin').toLowerCase(); // 'off' | 'optin' | 'all'
 
 const authClient  = (SUPABASE_URL && SUPABASE_ANON_KEY) ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 const adminClient = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } }) : null;
@@ -66,6 +67,12 @@ function randomOpenTile(){ for(;;){ const x=Math.floor(Math.random()*MAP_COLS), 
 function hpMaxForLevel(level){ return 20 + (level-1)*5; }
 function expToNext(level){ return level*10; }
 function distance(a,b){ return Math.abs(a.x-b.x)+Math.abs(a.y-b.y); }
+function canPvP(att,def){
+  if (PVP_MODE === 'off') return false;
+  if (PVP_MODE === 'all') return true;
+  // optin
+  return !!(att.pvp && def.pvp);
+}
 function handleMove(e,dir){ const d={up:{x:0,y:-1},down:{x:0,y:1},left:{x:-1,y:0},right:{x:1,y:0}}[dir]; if(!d) return; const nx=e.x+d.x, ny=e.y+d.y; if(!isBlocked(nx,ny)){ e.x=nx; e.y=ny; } }
 function tryAttack(att,target){ if(distance(att,target)<=1){ target.hp-=3; return target.hp<=0; } return false; }
 function levelUpIfNeeded(p){ const need=expToNext(p.level); if(p.exp>=need){ p.exp-=need; p.level++; p.hpMax=hpMaxForLevel(p.level); p.hp=p.hpMax; } }
@@ -118,9 +125,9 @@ wss.on('connection', ws => {
       const py      = snapshot?.y       ?? spawn.y;
       const potions = snapshot?.potions ?? 0;
 
-      players.set(id, { id, accountId: account?.id || ('guest:'+id), name, x:px, y:py, hp, hpMax, level, exp, potions, lastAttack:0, lastSaveAt:Date.now() });
+      players.set(id, { id, accountId: account?.id || ('guest:'+id), name, x:px, y:py, hp, hpMax, level, exp, potions, lastAttack:0, lastSaveAt:Date.now(), pvp:false });
 
-      send(ws, { type:'init', id, map:mapGrid, tileSize:TILE_SIZE, cols:MAP_COLS, rows:MAP_ROWS, render:{ ground:groundLayer, deco:decoLayer }, state:snapshotState() });
+      send(ws, { type:'init', id, map:mapGrid, tileSize:TILE_SIZE, cols:MAP_COLS, rows:MAP_ROWS, render:{ ground:groundLayer, deco:decoLayer }, pvpMode:PVP_MODE, state:snapshotState() });
       broadcast({ type:'player_joined', player: players.get(id) });
       return;
     }
@@ -129,12 +136,41 @@ wss.on('connection', ws => {
     const me = players.get(playerId);
 
     if (data.type==='input')  { if(typeof data.dir==='string') handleMove(me,data.dir); }
+    if (data.type==='toggle_pvp') {
+      me.pvp = !!data.value;
+      broadcast({ type:'pvp_update', id: me.id, pvp: me.pvp });
+    }
     if (data.type==='attack') {
       const now=Date.now(); if (now-me.lastAttack<300) return;
       me.lastAttack=now;
-      let killedId=null;
-      for (const [mid,m] of monsters) { if (distance(me,m)<=1) { const dead=tryAttack(me,m); if (dead) killedId=mid; break; } }
-      if (killedId) { monsters.delete(killedId); me.exp+=3; levelUpIfNeeded(me); if (Math.random()<0.6) { const dropId=uuidv4(); items.set(dropId,{id:dropId,x:me.x,y:me.y,kind:'potion'}); } }
+      let killedMonster=null, killedPlayer=null;
+
+      // Try monster first
+      for (const [mid,m] of monsters) { if (distance(me,m)<=1) { const dead=tryAttack(me,m); if (dead) killedMonster=mid; break; } }
+      if (killedMonster) {
+        monsters.delete(killedMonster);
+        me.exp+=3; levelUpIfNeeded(me);
+        if (Math.random()<0.6) { const dropId=uuidv4(); items.set(dropId,{id:dropId,x:me.x,y:me.y,kind:'potion'}); }
+      } else {
+        // Then try player PvP
+        if (PVP_MODE !== 'off') {
+          for (const [pid,p] of players) {
+            if (pid===me.id) continue;
+            if (distance(me,p)<=1 && canPvP(me,p)) {
+              const dead = tryAttack(me,p);
+              if (dead) killedPlayer = pid;
+              break;
+            }
+          }
+          if (killedPlayer) {
+            const victim = players.get(killedPlayer);
+            me.exp += 2; levelUpIfNeeded(me);
+            // Respawn victim
+            const pos = randomOpenTile();
+            victim.x = pos.x; victim.y = pos.y; victim.hp = victim.hpMax;
+          }
+        }
+      }
     }
     if (data.type==='pickup') { let picked=null; for(const [iid,it] of items){ if(it.x===me.x&&it.y===me.y){ picked=iid; break; } } if(picked){ const it=items.get(picked); items.delete(picked); if(it.kind==='potion') me.potions=(me.potions||0)+1; } }
     if (data.type==='use') { if (data.item==='potion' && me.potions>0 && me.hp<me.hpMax) { me.potions-=1; me.hp=Math.min(me.hpMax, me.hp+5); } }
@@ -157,7 +193,9 @@ function snapshotState(){ return { players:[...players.values()], monsters:[...m
 setInterval(() => {
   for (const m of monsters.values()) {
     if (Math.random()<0.5) continue;
-    const dirs=['up','down','left','right']; handleMove(m, dirs[Math.floor(Math.random()*dirs.length)]);
+    const dirs=['up','down','left','right']; const dir = dirs[Math.floor(Math.random()*dirs.length)];
+    const nx=m.x+(dir==='left'?-1:dir==='right'?1:0), ny=m.y+(dir==='up'?-1:dir==='down'?1:0);
+    if (!isBlocked(nx,ny)) { m.x=nx; m.y=ny; }
     for (const p of players.values()) {
       if (distance(m,p)<=1) { p.hp -= 1; if (p.hp<=0) { const pos=randomOpenTile(); p.x=pos.x; p.y=pos.y; p.hp=p.hpMax; } break; }
     }
@@ -167,4 +205,4 @@ setInterval(() => {
   broadcast({ type:'state', ...snapshotState() });
 }, 1000/TICK_RATE);
 
-server.listen(PORT, () => console.log(`MMORPG v${process.env.npm_package_version || '0.5.0'} http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`MMORPG v${process.env.npm_package_version || '0.6.0'} http://localhost:${PORT} — PvP mode: ${PVP_MODE}`));
